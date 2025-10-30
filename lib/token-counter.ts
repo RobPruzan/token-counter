@@ -17,6 +17,7 @@ export interface PartTokenInfo {
   type: string;
   tokens: number;
   preview?: string;
+  imageUrl?: string;
 }
 
 // Call the API to count tokens for a set of messages
@@ -59,15 +60,10 @@ export async function countTokensAPI(messages: Message[], apiKey: string): Promi
   }
 }
 
-// Analyze content and estimate tokens per part
+// Parse content structure for display purposes only (no token estimation)
 function analyzeContent(content: string | UserContent | AssistantContent | unknown): PartTokenInfo[] {
-  console.log('=== Analyzing content ===');
-  console.log('Content type:', typeof content);
-  console.log('Is array:', Array.isArray(content));
-  
   // Handle undefined, null, or empty content
   if (content === undefined || content === null) {
-    console.log('⚠ Content is undefined/null - returning empty text');
     return [{
       type: 'text',
       tokens: 0,
@@ -75,23 +71,17 @@ function analyzeContent(content: string | UserContent | AssistantContent | unkno
     }];
   }
   
-  console.log('Content:', JSON.stringify(content).slice(0, 200));
-  
   if (typeof content === 'string') {
-    console.log('✓ String content - Estimating tokens');
     const safeContent = content || '';
     return [{
       type: 'text',
-      tokens: Math.ceil(safeContent.length / 4), // Rough estimate: 1 token per 4 chars
+      tokens: 0,
       preview: safeContent.slice(0, 100)
     }];
   }
   
   if (Array.isArray(content)) {
-    console.log('✓ Array content with', content.length, 'parts');
-    
     if (content.length === 0) {
-      console.log('⚠ Empty array - returning empty text');
       return [{
         type: 'text',
         tokens: 0,
@@ -99,77 +89,85 @@ function analyzeContent(content: string | UserContent | AssistantContent | unkno
       }];
     }
     
-    return content.map((part, idx) => {
-      console.log(`  Part ${idx}:`, Object.keys(part));
+    return content.map((part: any) => {
+      // Handle text parts
       if ('text' in part) {
         const safeText = part.text || '';
-        const tokens = Math.ceil(safeText.length / 4);
-        console.log(`  ✓ Text part - Est. Tokens: ${tokens}`);
         return {
           type: 'text',
-          tokens: tokens,
+          tokens: 0,
           preview: safeText.slice(0, 100)
         };
       }
+      
+      // Handle reasoning parts
       if ('reasoning' in part) {
         const safeReasoning = part.reasoning || '';
-        const tokens = Math.ceil(safeReasoning.length / 4);
-        console.log(`  ✓ Reasoning part - Est. Tokens: ${tokens}`);
         return {
           type: 'reasoning',
-          tokens: tokens,
+          tokens: 0,
           preview: safeReasoning.slice(0, 100)
         };
       }
+      
+      // Handle image parts
       if ('image' in part) {
-        console.log(`  ✓ Image part - Fixed tokens: 1000`);
         return {
           type: 'image',
-          tokens: 1000,
+          tokens: 0,
           preview: typeof part.image === 'string' ? part.image.slice(0, 50) : 'URL'
         };
       }
-      if ('toolName' in part && 'args' in part) {
-        const text = JSON.stringify(part.args);
-        const tokens = Math.ceil(text.length / 4);
-        console.log(`  ✓ Tool call - Est. Tokens: ${tokens}`);
-        return {
-          type: 'tool-call',
-          tokens: tokens,
-          preview: `${part.toolName}(${text.slice(0, 50)})`
-        };
-      }
-      if ('toolName' in part && 'result' in part) {
-        const text = JSON.stringify(part.result);
-        const tokens = Math.ceil(text.length / 4);
-        console.log(`  ✓ Tool result - Est. Tokens: ${tokens}`);
-        return {
-          type: 'tool-result',
-          tokens: tokens,
-          preview: `Result: ${text.slice(0, 50)}`
-        };
-      }
-      if ('data' in part && 'mediaType' in part) {
-        console.log(`  ✓ File part - Fixed tokens: 1000`);
+      
+      // Handle file parts
+      if ('type' in part && part.type === 'file' && 'mediaType' in part) {
         return {
           type: 'file',
-          tokens: 1000,
-          preview: part.mediaType
+          tokens: 0,
+          preview: `${part.filename || 'file'} (${part.mediaType})`,
+          imageUrl: part.url
         };
       }
-      console.log(`  ✗ Unknown part type - Keys:`, Object.keys(part));
+      
+      // Handle tool calls
+      if ('type' in part && typeof part.type === 'string' && part.type.startsWith('tool-')) {
+        const toolName = part.type.replace('tool-', '').split(/(?=[A-Z])/).join(' ');
+        let preview = toolName;
+        let imageUrl = undefined;
+        
+        if ('input' in part) {
+          const inputText = JSON.stringify(part.input);
+          preview = `${toolName}: ${inputText.slice(0, 50)}`;
+        }
+        
+        if ('output' in part) {
+          if (typeof part.output === 'string') {
+            preview += ` → ${part.output.slice(0, 50)}`;
+          } else if (typeof part.output === 'object' && part.output !== null) {
+            if (part.output.type === 'image' && part.output.data) {
+              imageUrl = `data:image/jpeg;base64,${part.output.data}`;
+              preview = `${toolName} → screenshot (${(part.output.data.length / 1024).toFixed(1)}KB)`;
+            } else {
+              const outputText = JSON.stringify(part.output);
+              preview += ` → ${outputText.slice(0, 50)}`;
+            }
+          }
+        }
+        
+        return {
+          type: 'tool-call',
+          tokens: 0,
+          preview: preview,
+          imageUrl: imageUrl
+        };
+      }
+      
       return {
         type: 'unknown',
         tokens: 0,
         preview: JSON.stringify(part).slice(0, 100)
       };
     });
-  }
-  
-  console.log('✗ Unknown content type');
-  console.log('Content is object:', typeof content === 'object');
-  if (typeof content === 'object' && content !== null) {
-    console.log('Object keys:', Object.keys(content as any));
   }
   
   return [{
@@ -181,16 +179,14 @@ function analyzeContent(content: string | UserContent | AssistantContent | unkno
 
 export function analyzeMessage(message: Message, index: number): MessageTokenInfo {
   const parts = analyzeContent(message.content);
-  const textTokens = parts.filter(p => p.type !== 'image' && p.type !== 'file').reduce((sum, p) => sum + p.tokens, 0);
-  const imageTokens = parts.filter(p => p.type === 'image' || p.type === 'file').reduce((sum, p) => sum + p.tokens, 0);
 
   return {
     messageIndex: index,
     role: message.role,
     tokens: {
-      text: textTokens,
-      images: imageTokens,
-      total: textTokens + imageTokens
+      text: 0,
+      images: 0,
+      total: 0
     },
     parts
   };
@@ -208,42 +204,46 @@ export function getTotalTokens(analysis: MessageTokenInfo[]): TokenCount {
   }), { text: 0, images: 0, total: 0 });
 }
 
-// Use API to get accurate token counts
+// Use API to get accurate token counts - this is the ONLY way to get real counts
 export async function analyzeMessagesWithAPI(messages: Message[], apiKey: string): Promise<MessageTokenInfo[]> {
   try {
     // Get total token count from API
     const totalTokens = await countTokensAPI(messages, apiKey);
-    console.log('Total tokens from API:', totalTokens);
+    console.log('Total tokens from Anthropic API:', totalTokens);
 
-    // Do the local analysis for breakdown
+    // Parse structure for breakdown (tokens set to 0, will be distributed)
     const localAnalysis = analyzeMessages(messages);
-    const localTotal = getTotalTokens(localAnalysis);
-
-    // If API gave us a different total, scale all the estimates proportionally
-    if (localTotal.total > 0 && totalTokens !== localTotal.total) {
-      const scaleFactor = totalTokens / localTotal.total;
-      console.log('Scaling factor:', scaleFactor);
+    
+    // Count total parts across all messages to distribute tokens
+    const totalParts = localAnalysis.reduce((sum, msg) => sum + msg.parts.length, 0);
+    
+    if (totalParts === 0) {
+      return localAnalysis;
+    }
+    
+    // Distribute the API token count proportionally across parts
+    // This is still an approximation but at least the total will be accurate
+    const tokensPerPart = totalTokens / totalParts;
+    
+    return localAnalysis.map(msg => {
+      const partTokens = msg.parts.map(part => Math.round(tokensPerPart));
+      const msgTotal = partTokens.reduce((sum, t) => sum + t, 0);
       
-      return localAnalysis.map(msg => ({
+      return {
         ...msg,
         tokens: {
-          text: Math.round(msg.tokens.text * scaleFactor),
-          images: msg.tokens.images, // Keep images at fixed 1000
-          total: Math.round((msg.tokens.text * scaleFactor) + msg.tokens.images)
+          text: msgTotal,
+          images: 0,
+          total: msgTotal
         },
-        parts: msg.parts.map(part => ({
+        parts: msg.parts.map((part, idx) => ({
           ...part,
-          tokens: part.type === 'image' || part.type === 'file' 
-            ? part.tokens 
-            : Math.round(part.tokens * scaleFactor)
+          tokens: partTokens[idx]
         }))
-      }));
-    }
-
-    return localAnalysis;
+      };
+    });
   } catch (error) {
-    console.error('API analysis failed, falling back to estimates:', error);
-    // Fall back to local estimates if API fails
-    return analyzeMessages(messages);
+    console.error('API analysis failed:', error);
+    throw error;
   }
 }

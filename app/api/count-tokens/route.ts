@@ -80,6 +80,18 @@ export async function POST(request: NextRequest) {
               };
             }
             
+            // Screenshot tool output: {type: "image", data: base64, filePath: ...}
+            if ('data' in part && part.type === 'image' && typeof part.data === 'string') {
+              return {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: 'image/jpeg',
+                  data: part.data,
+                },
+              };
+            }
+            
             // Tool call/result/reasoning - convert to text
             if ('toolName' in part || 'reasoning' in part) {
               const text = part.reasoning || 
@@ -103,7 +115,7 @@ export async function POST(request: NextRequest) {
     const systemContent = systemMessage?.content;
 
     const requestBody: any = {
-      model: 'claude-3-7-sonnet-20250219',
+      model: 'claude-sonnet-4-5-20250929',
       messages: anthropicMessages,
     };
 
