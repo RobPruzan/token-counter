@@ -20,8 +20,8 @@ export async function POST(request: NextRequest) {
 
     // Transform messages to Anthropic's expected format
     const transformedMessages = messages
-      .filter((msg: Record<string, unknown>) => msg.role !== 'system')
-      .map((msg: Record<string, unknown>, msgIndex: number) => {
+      .filter((msg: any) => msg.role !== 'system')
+      .map((msg: any, msgIndex: number) => {
         let content = msg.content;
         
         // Handle undefined/null/empty content
@@ -36,7 +36,7 @@ export async function POST(request: NextRequest) {
         
         // Transform content array to Anthropic format
         if (Array.isArray(content)) {
-          const transformedContent = content.map((part: Record<string, unknown>) => {
+          const transformedContent = content.map((part: any) => {
             // Text part - already in correct format
             if (part.type === 'text' && 'text' in part) {
               return { type: 'text', text: part.text || '' };
@@ -114,8 +114,8 @@ export async function POST(request: NextRequest) {
             
             // Tool call/result/reasoning - convert to text
             if ('toolName' in part || 'reasoning' in part) {
-              const text = String(part.reasoning || 
-                          ('args' in part ? `[Tool: ${String(part.toolName)}]` : `[Result: ${String(part.toolName)}]`));
+              const text = part.reasoning || 
+                          ('args' in part ? `[Tool: ${part.toolName}]` : `[Result: ${part.toolName}]`);
               return { type: 'text', text };
             }
             
@@ -132,11 +132,11 @@ export async function POST(request: NextRequest) {
     
     // Shim: Extract images from assistant messages and inject as user messages
     // Anthropic doesn't allow image blocks in assistant messages
-    const anthropicMessages: Record<string, unknown>[] = [];
+    const anthropicMessages: any[] = [];
     for (const msg of transformedMessages) {
       if (msg.role === 'assistant' && Array.isArray(msg.content)) {
-        const images = msg.content.filter((part: Record<string, unknown>) => part.type === 'image');
-        const nonImages = msg.content.filter((part: Record<string, unknown>) => part.type !== 'image');
+        const images = msg.content.filter((part: any) => part.type === 'image');
+        const nonImages = msg.content.filter((part: any) => part.type !== 'image');
         
         // Add assistant message without images
         if (nonImages.length > 0) {
@@ -158,10 +158,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Extract system message if present
-    const systemMessage = messages.find((m: Record<string, unknown>) => m.role === 'system');
+    const systemMessage = messages.find((m: any) => m.role === 'system');
     const systemContent = systemMessage?.content;
 
-    const requestBody: Record<string, unknown> = {
+    const requestBody: any = {
       model: 'claude-sonnet-4-5-20250929',
       messages: anthropicMessages,
     };

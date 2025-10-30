@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { Upload, Settings, X, ArrowLeft } from 'lucide-react';
 import { Message } from '@/lib/types/ai-messages';
 import { analyzeMessagesWithAPI, MessageTokenInfo, getTotalTokens } from '@/lib/token-counter';
 import { TokenHeatmap } from './components/TokenHeatmap';
+import { PartHeatmap } from './components/PartHeatmap';
 import { MessageList } from './components/MessageList';
 import { TokenStats } from './components/TokenStats';
 
@@ -24,10 +25,13 @@ export default function TokenAnalyzer() {
   const [selectedChat, setSelectedChat] = useState<ChatGroup | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('all');
+  const [sortMode, setSortMode] = useState<'default' | 'ranked' | 'dedup'>('default');
+  const [viewMode, setViewMode] = useState<'messages' | 'parts'>('messages');
   const [apiKey, setApiKey] = useState('');
   const [showSettings, setShowSettings] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState<{ current: number; total: number } | null>(null);
   const [error, setError] = useState<string>('');
   const [selectedMessageId, setSelectedMessageId] = useState<number | null>(null);
   const [imageTokenCount, setImageTokenCount] = useState<number | null>(null);
@@ -187,7 +191,7 @@ export default function TokenAnalyzer() {
         }
 
         // Transform messages: convert 'parts' to 'content' if needed
-        messagesToAnalyze = messagesToAnalyze.map((msg: Record<string, unknown>) => {
+        messagesToAnalyze = messagesToAnalyze.map((msg: any) => {
           if (msg.parts && !msg.content) {
             return {
               ...msg,
@@ -204,20 +208,16 @@ export default function TokenAnalyzer() {
         }
         
         // Group messages by chatId
-        const chatMap = new Map<string, { messages: Message[]; createdAt: number }>();
-        messagesToAnalyze.forEach((msg: Record<string, unknown>) => {
-          const metadata = msg.metadata as { chatId?: string; createdAt?: number } | undefined;
-          const chatId = metadata?.chatId || 'default';
+        const chatMap = new Map<string, any>();
+        messagesToAnalyze.forEach((msg: any) => {
+          const chatId = msg.metadata?.chatId || 'default';
           if (!chatMap.has(chatId)) {
             chatMap.set(chatId, {
               messages: [],
-              createdAt: metadata?.createdAt || 0
+              createdAt: msg.metadata?.createdAt || 0
             });
           }
-          const chatData = chatMap.get(chatId);
-          if (chatData) {
-            chatData.messages.push(msg as Message);
-          }
+          chatMap.get(chatId).messages.push(msg);
         });
 
         // Analyze and create chat groups
@@ -231,14 +231,12 @@ export default function TokenAnalyzer() {
         
         for (const [chatId, data] of chatMap.entries()) {
           // Sort messages by createdAt
-          const sortedMessages = data.messages.sort((a, b) => {
-            const aMetadata = a.metadata as { createdAt?: number } | undefined;
-            const bMetadata = b.metadata as { createdAt?: number } | undefined;
-            return (aMetadata?.createdAt || 0) - (bMetadata?.createdAt || 0);
-          });
+          const sortedMessages = data.messages.sort((a: any, b: any) => 
+            (a.metadata?.createdAt || 0) - (b.metadata?.createdAt || 0)
+          );
 
-          // Use API for accurate token counts
-          const analyzed = await analyzeMessagesWithAPI(sortedMessages, apiKey);
+          // Use API for accurate token counts with per-part accuracy
+          const analyzed = await analyzeMessagesWithAPI(sortedMessages, apiKey, true);
           const totalTokens = getTotalTokens(analyzed);
 
           chatGroups.push({
@@ -249,12 +247,15 @@ export default function TokenAnalyzer() {
             messageCount: sortedMessages.length,
             totalTokens: totalTokens.total
           });
+          
+          setLoadingProgress({ current: chatGroups.length, total: chatMap.size });
         }
 
         // Sort chats by createdAt (most recent first)
         chatGroups.sort((a, b) => b.createdAt - a.createdAt);
         
         setChats(chatGroups);
+        setLoadingProgress(null);
         setIsLoading(false);
       } catch (err) {
         setError('Failed to parse JSON: ' + (err as Error).message);
@@ -276,6 +277,48 @@ export default function TokenAnalyzer() {
       msg.parts.some(part => part.preview?.toLowerCase().includes(searchQuery.toLowerCase()));
     return matchesRole && matchesSearch;
   }) : [];
+
+  // Apply sorting/dedup
+  const processedAnalysis = useMemo(() => {
+    if (!filteredAnalysis.length) return [];
+    
+    if (sortMode === 'ranked') {
+      // Sort by total tokens descending
+      return [...filteredAnalysis].sort((a, b) => b.tokens.total - a.tokens.total);
+    } else if (sortMode === 'dedup') {
+      // Group by part type and sum tokens
+      const dedupMap = new Map<string, MessageTokenInfo>();
+      
+      filteredAnalysis.forEach(msg => {
+        msg.parts.forEach(part => {
+          const key = part.type;
+          if (dedupMap.has(key)) {
+            const existing = dedupMap.get(key)!;
+            existing.tokens.total += part.tokens;
+            existing.tokens.text += part.tokens;
+            existing.parts.push(part);
+          } else {
+            dedupMap.set(key, {
+              messageIndex: -1,
+              role: `all (${key})`,
+              tokens: {
+                text: part.tokens,
+                images: 0,
+                total: part.tokens
+              },
+              parts: [part]
+            });
+          }
+        });
+      });
+      
+      return Array.from(dedupMap.values()).sort((a, b) => b.tokens.total - a.tokens.total);
+    }
+    
+    return filteredAnalysis;
+  }, [filteredAnalysis, sortMode]);
+
+  const totalTokens = selectedChat ? getTotalTokens(selectedChat.analysis) : { text: 0, images: 0, total: 0 };
   
   // Calculate grand total across all chats
   const grandTotal = chats.reduce((sum, chat) => sum + chat.totalTokens, 0);
@@ -422,7 +465,17 @@ export default function TokenAnalyzer() {
                     <>
                       <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white"></div>
                       <div className="text-center">
-                        <div className="text-lg font-medium mb-1">Processing file...</div>
+                        <div className="text-lg font-medium mb-1">
+                          {loadingProgress 
+                            ? `Calculating tokens... (${loadingProgress.current}/${loadingProgress.total} chats)`
+                            : 'Processing file...'
+                          }
+                        </div>
+                        {loadingProgress && (
+                          <div className="text-sm text-[#888]">
+                            Making accurate per-part API calls
+                          </div>
+                        )}
                       </div>
                     </>
                   ) : (
@@ -431,7 +484,7 @@ export default function TokenAnalyzer() {
                       <div className="text-center">
                         <div className="text-lg font-medium mb-1">Upload AI SDK Messages</div>
                         <div className="text-sm text-[#888]">
-                          JSON array or object with &quot;messages&quot; or &quot;data.messages&quot; field
+                          JSON array or object with "messages" or "data.messages" field
                         </div>
                       </div>
                     </>
@@ -553,6 +606,23 @@ export default function TokenAnalyzer() {
                 <option value="assistant">Assistant</option>
                 <option value="tool">Tool</option>
               </select>
+              <select
+                value={sortMode}
+                onChange={(e) => setSortMode(e.target.value as any)}
+                className="px-4 py-2 bg-[#1a1a1a] border border-[#2a2a2a] rounded-md focus:outline-none focus:border-[#3a3a3a]"
+              >
+                <option value="default">Default Order</option>
+                <option value="ranked">Ranked (by tokens)</option>
+                <option value="dedup">Dedup (by type)</option>
+              </select>
+              <select
+                value={viewMode}
+                onChange={(e) => setViewMode(e.target.value as any)}
+                className="px-4 py-2 bg-[#1a1a1a] border border-[#2a2a2a] rounded-md focus:outline-none focus:border-[#3a3a3a]"
+              >
+                <option value="messages">Messages View</option>
+                <option value="parts">Parts View</option>
+              </select>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setZoom(Math.max(0.5, zoom - 0.1))}
@@ -571,19 +641,29 @@ export default function TokenAnalyzer() {
             </div>
 
             <TokenStats analysis={selectedChat.analysis} />
-            <TokenHeatmap 
-              analysis={filteredAnalysis} 
-              zoom={zoom} 
-              onMessageClick={scrollToMessage}
-            />
-            <MessageList 
-              messages={selectedChat.messages} 
-              analysis={filteredAnalysis} 
-              zoom={zoom}
-              selectedMessageId={selectedMessageId}
-              apiKey={apiKey}
-              onUpdateAnalysis={handleUpdateAnalysis}
-            />
+            
+            {viewMode === 'messages' ? (
+              <>
+                <TokenHeatmap 
+                  analysis={processedAnalysis} 
+                  zoom={zoom} 
+                  onMessageClick={scrollToMessage}
+                />
+                <MessageList 
+                  messages={selectedChat.messages} 
+                  analysis={processedAnalysis} 
+                  zoom={zoom}
+                  selectedMessageId={selectedMessageId}
+                  apiKey={apiKey}
+                  onUpdateAnalysis={handleUpdateAnalysis}
+                />
+              </>
+            ) : (
+              <PartHeatmap 
+                analysis={processedAnalysis}
+                zoom={zoom}
+              />
+            )}
           </div>
         )}
       </div>

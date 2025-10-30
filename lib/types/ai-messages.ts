@@ -40,25 +40,21 @@ export type AssistantContent = string | Array<TextPart | FilePart | ReasoningPar
 export interface UserMessage {
   role: 'user';
   content: UserContent;
-  metadata?: Record<string, unknown>;
 }
 
 export interface AssistantMessage {
   role: 'assistant';
   content: AssistantContent;
-  metadata?: Record<string, unknown>;
 }
 
 export interface SystemMessage {
   role: 'system';
   content: string;
-  metadata?: Record<string, unknown>;
 }
 
 export interface ToolMessage {
   role: 'tool';
   content: Array<ToolResultPart>;
-  metadata?: Record<string, unknown>;
 }
 
 export type Message = SystemMessage | UserMessage | AssistantMessage | ToolMessage;

@@ -89,7 +89,7 @@ function analyzeContent(content: string | UserContent | AssistantContent | unkno
       }];
     }
     
-    return content.map((part: Record<string, unknown>) => {
+    return content.map((part: any) => {
       // Handle text parts
       if ('text' in part) {
         const safeText = part.text || '';
@@ -205,28 +205,89 @@ export function getTotalTokens(analysis: MessageTokenInfo[]): TokenCount {
 }
 
 // Use API to get accurate token counts - this is the ONLY way to get real counts
-export async function analyzeMessagesWithAPI(messages: Message[], apiKey: string): Promise<MessageTokenInfo[]> {
+export async function analyzeMessagesWithAPI(messages: Message[], apiKey: string, accuratePerPart: boolean = false): Promise<MessageTokenInfo[]> {
   try {
-    // Get total token count from API
+    if (accuratePerPart) {
+      // Calculate accurate per-part tokens by making individual API calls
+      const results: MessageTokenInfo[] = [];
+      
+      for (let msgIdx = 0; msgIdx < messages.length; msgIdx++) {
+        const message = messages[msgIdx];
+        const content = message.content;
+        
+        if (Array.isArray(content) && content.length > 0) {
+          const partTokens = await Promise.all(
+            content.map(async (part) => {
+              try {
+                const partMessage = {
+                  role: message.role,
+                  content: [part]
+                };
+                const tokens = await countTokensAPI([partMessage as Message], apiKey);
+                return tokens;
+              } catch {
+                return 0;
+              }
+            })
+          );
+          
+          const localAnalysis = analyzeMessages([message]);
+          const msgAnalysis = localAnalysis[0];
+          
+          results.push({
+            ...msgAnalysis,
+            messageIndex: msgIdx,
+            tokens: {
+              text: partTokens.reduce((sum, t) => sum + t, 0),
+              images: 0,
+              total: partTokens.reduce((sum, t) => sum + t, 0)
+            },
+            parts: msgAnalysis.parts.map((part, idx) => ({
+              ...part,
+              tokens: partTokens[idx] || 0
+            }))
+          });
+        } else {
+          // Simple message, just count total
+          const tokens = await countTokensAPI([message], apiKey);
+          const localAnalysis = analyzeMessages([message]);
+          const msgAnalysis = localAnalysis[0];
+          
+          results.push({
+            ...msgAnalysis,
+            messageIndex: msgIdx,
+            tokens: {
+              text: tokens,
+              images: 0,
+              total: tokens
+            },
+            parts: msgAnalysis.parts.map(part => ({
+              ...part,
+              tokens
+            }))
+          });
+        }
+      }
+      
+      return results;
+    }
+    
+    // Original fast but approximate method
     const totalTokens = await countTokensAPI(messages, apiKey);
     console.log('Total tokens from Anthropic API:', totalTokens);
 
-    // Parse structure for breakdown (tokens set to 0, will be distributed)
     const localAnalysis = analyzeMessages(messages);
     
-    // Count total parts across all messages to distribute tokens
     const totalParts = localAnalysis.reduce((sum, msg) => sum + msg.parts.length, 0);
     
     if (totalParts === 0) {
       return localAnalysis;
     }
     
-    // Distribute the API token count proportionally across parts
-    // This is still an approximation but at least the total will be accurate
     const tokensPerPart = totalTokens / totalParts;
     
     return localAnalysis.map(msg => {
-      const partTokens = msg.parts.map(() => Math.round(tokensPerPart));
+      const partTokens = msg.parts.map(part => Math.round(tokensPerPart));
       const msgTotal = partTokens.reduce((sum, t) => sum + t, 0);
       
       return {

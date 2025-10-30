@@ -1,6 +1,6 @@
 import { Message } from '@/lib/types/ai-messages';
 import { MessageTokenInfo } from '@/lib/token-counter';
-import { ChevronDown, ChevronRight, Zap } from 'lucide-react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
 interface ImageStats {
@@ -97,7 +97,6 @@ interface MessageListProps {
 export function MessageList({ messages, analysis, zoom, selectedMessageId, apiKey, onUpdateAnalysis }: MessageListProps) {
   const [expandedMessages, setExpandedMessages] = useState<Set<number>>(new Set());
   const [expandedParts, setExpandedParts] = useState<Set<string>>(new Set());
-  const [calculatingMessage, setCalculatingMessage] = useState<number | null>(null);
 
   // Auto-expand selected message
   useEffect(() => {
@@ -125,83 +124,6 @@ export function MessageList({ messages, analysis, zoom, selectedMessageId, apiKe
       newExpanded.add(key);
     }
     setExpandedParts(newExpanded);
-  };
-
-  const calculateAccurateTokens = async (messageIndex: number) => {
-    if (!apiKey) return;
-    
-    setCalculatingMessage(messageIndex);
-    try {
-      // Call API to count tokens for just this message
-      const response = await fetch('/api/count-tokens', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [messages[messageIndex]],
-          apiKey
-        })
-      });
-      
-      if (!response.ok) throw new Error('API call failed');
-      
-      const data = await response.json();
-      const totalTokens = data.input_tokens || 0;
-      
-      // Get the message content parts
-      const message = messages[messageIndex];
-      const content = message.content;
-      
-      if (Array.isArray(content) && content.length > 0) {
-        // Now make individual API calls for each part to get accurate breakdown
-        const partTokens = await Promise.all(
-          content.map(async (part) => {
-            try {
-              // Create a minimal message with just this part
-              const partMessage = {
-                role: message.role,
-                content: [part]
-              };
-              
-              const partResponse = await fetch('/api/count-tokens', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  messages: [partMessage],
-                  apiKey
-                })
-              });
-              
-              if (!partResponse.ok) return 0;
-              const partData = await partResponse.json();
-              return partData.input_tokens || 0;
-            } catch {
-              return 0;
-            }
-          })
-        );
-        
-        // Update the analysis with accurate tokens
-        const currentAnalysis = analysis[messageIndex];
-        const updatedAnalysis: MessageTokenInfo = {
-          ...currentAnalysis,
-          tokens: {
-            text: totalTokens,
-            images: 0,
-            total: totalTokens
-          },
-          parts: currentAnalysis.parts.map((part, idx) => ({
-            ...part,
-            tokens: partTokens[idx] || 0
-          }))
-        };
-        
-        onUpdateAnalysis(messageIndex, updatedAnalysis);
-      }
-    } catch (error) {
-      console.error('Error calculating tokens:', error);
-    } finally {
-      setCalculatingMessage(null);
-    }
   };
 
   const scrollToPart = (messageIndex: number, partIndex: number) => {
@@ -488,28 +410,9 @@ export function MessageList({ messages, analysis, zoom, selectedMessageId, apiKe
 
             {isExpanded && (
               <div className="px-4 pb-4 space-y-4">
-                {/* Add Calculate Accurate Tokens button */}
-                <button
-                  onClick={() => calculateAccurateTokens(item.messageIndex)}
-                  disabled={calculatingMessage === item.messageIndex}
-                  className="w-full py-2 px-3 bg-[#2a2a2a] hover:bg-[#3a3a3a] disabled:opacity-50 disabled:cursor-not-allowed rounded flex items-center justify-center gap-2 text-sm transition-colors"
-                >
-                  {calculatingMessage === item.messageIndex ? (
-                    <>
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                      <span>Calculating accurate tokens...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Zap size={14} />
-                      <span>Calculate Accurate Token Breakdown</span>
-                    </>
-                  )}
-                </button>
-                
                 <div className="space-y-2">
                   <div className="text-xs text-[#888] font-medium">Token Breakdown</div>
-                  {item.parts.map((part, idx) => {
+                  {[...item.parts].sort((a, b) => b.tokens - a.tokens).map((part, idx) => {
                     const percentage = (part.tokens / item.tokens.total) * 100;
                     const partKey = `${item.messageIndex}-${idx}`;
                     const isPartExpanded = expandedParts.has(partKey);
