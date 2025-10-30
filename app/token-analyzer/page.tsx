@@ -8,6 +8,8 @@ import { TokenHeatmap } from './components/TokenHeatmap';
 import { MessageList } from './components/MessageList';
 import { TokenStats } from './components/TokenStats';
 
+export const dynamic = 'force-dynamic';
+
 interface ChatGroup {
   chatId: string;
   messages: Message[];
