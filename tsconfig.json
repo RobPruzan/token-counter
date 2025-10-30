@@ -36,7 +36,6 @@
     ".next-prod/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules",
-    "ai-sdk-clone/**"
+    "node_modules"
   ]
 }
