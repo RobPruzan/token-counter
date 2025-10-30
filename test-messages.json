@@ -1,0 +1,21 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hello, world"
+    },
+    {
+      "role": "assistant",
+      "content": "Hi! How can I help you today?"
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "Can you analyze this?"
+        }
+      ]
+    }
+  ]
+}

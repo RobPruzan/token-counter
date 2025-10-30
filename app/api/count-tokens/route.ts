@@ -1,0 +1,144 @@
+import { NextRequest, NextResponse } from 'next/server';
+
+export async function POST(request: NextRequest) {
+  try {
+    const { messages, apiKey } = await request.json();
+
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: 'API key is required' },
+        { status: 400 }
+      );
+    }
+
+    if (!messages || !Array.isArray(messages)) {
+      return NextResponse.json(
+        { error: 'Messages array is required' },
+        { status: 400 }
+      );
+    }
+
+    // Transform messages to Anthropic's expected format
+    const anthropicMessages = messages
+      .filter((msg: any) => msg.role !== 'system')
+      .map((msg: any) => {
+        let content = msg.content;
+        
+        // Handle undefined/null/empty content
+        if (!content || (Array.isArray(content) && content.length === 0)) {
+          content = '[empty]';
+        }
+        
+        // If content is already a string, keep it as-is
+        if (typeof content === 'string') {
+          return { role: msg.role, content };
+        }
+        
+        // Transform content array to Anthropic format
+        if (Array.isArray(content)) {
+          const transformedContent = content.map((part: any) => {
+            // Text part - already in correct format
+            if (part.type === 'text' && 'text' in part) {
+              return { type: 'text', text: part.text || '' };
+            }
+            
+            // Legacy format: has 'text' property without type
+            if ('text' in part && !part.type) {
+              return { type: 'text', text: part.text || '' };
+            }
+            
+            // Image part
+            if ('image' in part) {
+              const imageData = typeof part.image === 'string' ? part.image : String(part.image);
+              if (imageData.startsWith('data:')) {
+                const [mediaType, base64Data] = imageData.split(',');
+                const type = mediaType.split(':')[1]?.split(';')[0] || 'image/jpeg';
+                return {
+                  type: 'image',
+                  source: {
+                    type: 'base64',
+                    media_type: type,
+                    data: base64Data,
+                  },
+                };
+              }
+              return {
+                type: 'image',
+                source: { type: 'url', url: imageData },
+              };
+            }
+            
+            // Document/File part
+            if ('data' in part && 'mediaType' in part) {
+              return {
+                type: 'document',
+                source: {
+                  type: 'base64',
+                  media_type: part.mediaType,
+                  data: part.data,
+                },
+              };
+            }
+            
+            // Tool call/result/reasoning - convert to text
+            if ('toolName' in part || 'reasoning' in part) {
+              const text = part.reasoning || 
+                          ('args' in part ? `[Tool: ${part.toolName}]` : `[Result: ${part.toolName}]`);
+              return { type: 'text', text };
+            }
+            
+            // Unknown - convert to text
+            return { type: 'text', text: JSON.stringify(part) };
+          });
+          
+          return { role: msg.role, content: transformedContent };
+        }
+        
+        // Fallback for other types
+        return { role: msg.role, content: String(content) };
+      });
+
+    // Extract system message if present
+    const systemMessage = messages.find((m: any) => m.role === 'system');
+    const systemContent = systemMessage?.content;
+
+    const requestBody: any = {
+      model: 'claude-3-7-sonnet-20250219',
+      messages: anthropicMessages,
+    };
+
+    // Only add system if it exists and has content
+    if (systemContent && typeof systemContent === 'string' && systemContent.trim()) {
+      requestBody.system = systemContent;
+    }
+
+    // Call Anthropic API to count tokens
+    const response = await fetch('https://api.anthropic.com/v1/messages/count_tokens', {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Anthropic API error:', errorText);
+      return NextResponse.json(
+        { error: `Anthropic API error: ${response.status} ${errorText}` },
+        { status: response.status }
+      );
+    }
+
+    const data = await response.json();
+    return NextResponse.json(data);
+  } catch (error) {
+    console.error('Token counting error:', error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'Unknown error' },
+      { status: 500 }
+    );
+  }
+}
