@@ -3,7 +3,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { Upload, Settings, X, ArrowLeft } from 'lucide-react';
 import { Message } from '@/lib/types/ai-messages';
-import { analyzeMessages, analyzeMessagesWithAPI, MessageTokenInfo, getTotalTokens } from '@/lib/token-counter';
+import { analyzeMessagesWithAPI, MessageTokenInfo, getTotalTokens } from '@/lib/token-counter';
 import { TokenHeatmap } from './components/TokenHeatmap';
 import { MessageList } from './components/MessageList';
 import { TokenStats } from './components/TokenStats';
@@ -18,10 +18,8 @@ interface ChatGroup {
 }
 
 export default function TokenAnalyzer() {
-  const [messages, setMessages] = useState<Message[]>([]);
   const [chats, setChats] = useState<ChatGroup[]>([]);
   const [selectedChat, setSelectedChat] = useState<ChatGroup | null>(null);
-  const [analysis, setAnalysis] = useState<MessageTokenInfo[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('all');
   const [apiKey, setApiKey] = useState('');
@@ -187,7 +185,7 @@ export default function TokenAnalyzer() {
         }
 
         // Transform messages: convert 'parts' to 'content' if needed
-        messagesToAnalyze = messagesToAnalyze.map((msg: any) => {
+        messagesToAnalyze = messagesToAnalyze.map((msg: Record<string, unknown>) => {
           if (msg.parts && !msg.content) {
             return {
               ...msg,
@@ -202,20 +200,22 @@ export default function TokenAnalyzer() {
           setIsLoading(false);
           return;
         }
-
-        setMessages(messagesToAnalyze);
         
         // Group messages by chatId
-        const chatMap = new Map<string, any>();
-        messagesToAnalyze.forEach((msg: any) => {
-          const chatId = msg.metadata?.chatId || 'default';
+        const chatMap = new Map<string, { messages: Message[]; createdAt: number }>();
+        messagesToAnalyze.forEach((msg: Record<string, unknown>) => {
+          const metadata = msg.metadata as { chatId?: string; createdAt?: number } | undefined;
+          const chatId = metadata?.chatId || 'default';
           if (!chatMap.has(chatId)) {
             chatMap.set(chatId, {
               messages: [],
-              createdAt: msg.metadata?.createdAt || 0
+              createdAt: metadata?.createdAt || 0
             });
           }
-          chatMap.get(chatId).messages.push(msg);
+          const chatData = chatMap.get(chatId);
+          if (chatData) {
+            chatData.messages.push(msg as Message);
+          }
         });
 
         // Analyze and create chat groups
@@ -229,9 +229,11 @@ export default function TokenAnalyzer() {
         
         for (const [chatId, data] of chatMap.entries()) {
           // Sort messages by createdAt
-          const sortedMessages = data.messages.sort((a: any, b: any) => 
-            (a.metadata?.createdAt || 0) - (b.metadata?.createdAt || 0)
-          );
+          const sortedMessages = data.messages.sort((a, b) => {
+            const aMetadata = a.metadata as { createdAt?: number } | undefined;
+            const bMetadata = b.metadata as { createdAt?: number } | undefined;
+            return (aMetadata?.createdAt || 0) - (bMetadata?.createdAt || 0);
+          });
 
           // Use API for accurate token counts
           const analyzed = await analyzeMessagesWithAPI(sortedMessages, apiKey);
@@ -272,8 +274,6 @@ export default function TokenAnalyzer() {
       msg.parts.some(part => part.preview?.toLowerCase().includes(searchQuery.toLowerCase()));
     return matchesRole && matchesSearch;
   }) : [];
-
-  const totalTokens = selectedChat ? getTotalTokens(selectedChat.analysis) : { text: 0, images: 0, total: 0 };
   
   // Calculate grand total across all chats
   const grandTotal = chats.reduce((sum, chat) => sum + chat.totalTokens, 0);
@@ -429,7 +429,7 @@ export default function TokenAnalyzer() {
                       <div className="text-center">
                         <div className="text-lg font-medium mb-1">Upload AI SDK Messages</div>
                         <div className="text-sm text-[#888]">
-                          JSON array or object with "messages" or "data.messages" field
+                          JSON array or object with &quot;messages&quot; or &quot;data.messages&quot; field
                         </div>
                       </div>
                     </>

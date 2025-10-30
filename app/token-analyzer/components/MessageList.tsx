@@ -154,7 +154,7 @@ export function MessageList({ messages, analysis, zoom, selectedMessageId, apiKe
       if (Array.isArray(content) && content.length > 0) {
         // Now make individual API calls for each part to get accurate breakdown
         const partTokens = await Promise.all(
-          content.map(async (part, idx) => {
+          content.map(async (part) => {
             try {
               // Create a minimal message with just this part
               const partMessage = {

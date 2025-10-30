@@ -19,9 +19,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Transform messages to Anthropic's expected format
-    const anthropicMessages = messages
-      .filter((msg: any) => msg.role !== 'system')
-      .map((msg: any) => {
+    const transformedMessages = messages
+      .filter((msg: Record<string, unknown>) => msg.role !== 'system')
+      .map((msg: Record<string, unknown>, msgIndex: number) => {
         let content = msg.content;
         
         // Handle undefined/null/empty content
@@ -36,7 +36,7 @@ export async function POST(request: NextRequest) {
         
         // Transform content array to Anthropic format
         if (Array.isArray(content)) {
-          const transformedContent = content.map((part: any) => {
+          const transformedContent = content.map((part: Record<string, unknown>) => {
             // Text part - already in correct format
             if (part.type === 'text' && 'text' in part) {
               return { type: 'text', text: part.text || '' };
@@ -80,6 +80,26 @@ export async function POST(request: NextRequest) {
               };
             }
             
+            // Tool result with output field (e.g., screenshot tool)
+            if ('output' in part && part.output && typeof part.output === 'object') {
+              const output = part.output as any;
+              
+              // Screenshot output: {type: "image", data: base64, filePath: ...}
+              if (output.type === 'image' && 'data' in output && typeof output.data === 'string') {
+                return {
+                  type: 'image',
+                  source: {
+                    type: 'base64',
+                    media_type: 'image/jpeg',
+                    data: output.data,
+                  },
+                };
+              }
+              
+              // Other output formats - convert to text
+              return { type: 'text', text: typeof output === 'string' ? output : JSON.stringify(output) };
+            }
+            
             // Screenshot tool output: {type: "image", data: base64, filePath: ...}
             if ('data' in part && part.type === 'image' && typeof part.data === 'string') {
               return {
@@ -94,8 +114,8 @@ export async function POST(request: NextRequest) {
             
             // Tool call/result/reasoning - convert to text
             if ('toolName' in part || 'reasoning' in part) {
-              const text = part.reasoning || 
-                          ('args' in part ? `[Tool: ${part.toolName}]` : `[Result: ${part.toolName}]`);
+              const text = String(part.reasoning || 
+                          ('args' in part ? `[Tool: ${String(part.toolName)}]` : `[Result: ${String(part.toolName)}]`));
               return { type: 'text', text };
             }
             
@@ -109,12 +129,39 @@ export async function POST(request: NextRequest) {
         // Fallback for other types
         return { role: msg.role, content: String(content) };
       });
+    
+    // Shim: Extract images from assistant messages and inject as user messages
+    // Anthropic doesn't allow image blocks in assistant messages
+    const anthropicMessages: Record<string, unknown>[] = [];
+    for (const msg of transformedMessages) {
+      if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+        const images = msg.content.filter((part: Record<string, unknown>) => part.type === 'image');
+        const nonImages = msg.content.filter((part: Record<string, unknown>) => part.type !== 'image');
+        
+        // Add assistant message without images
+        if (nonImages.length > 0) {
+          anthropicMessages.push({ role: 'assistant', content: nonImages });
+        } else {
+          anthropicMessages.push({ role: 'assistant', content: '[tool output]' });
+        }
+        
+        // If there were images, inject a fake user message with them
+        if (images.length > 0) {
+          anthropicMessages.push({ 
+            role: 'user', 
+            content: images 
+          });
+        }
+      } else {
+        anthropicMessages.push(msg);
+      }
+    }
 
     // Extract system message if present
-    const systemMessage = messages.find((m: any) => m.role === 'system');
+    const systemMessage = messages.find((m: Record<string, unknown>) => m.role === 'system');
     const systemContent = systemMessage?.content;
 
-    const requestBody: any = {
+    const requestBody: Record<string, unknown> = {
       model: 'claude-sonnet-4-5-20250929',
       messages: anthropicMessages,
     };

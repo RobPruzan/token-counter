@@ -89,7 +89,7 @@ function analyzeContent(content: string | UserContent | AssistantContent | unkno
       }];
     }
     
-    return content.map((part: any) => {
+    return content.map((part: Record<string, unknown>) => {
       // Handle text parts
       if ('text' in part) {
         const safeText = part.text || '';
@@ -226,7 +226,7 @@ export async function analyzeMessagesWithAPI(messages: Message[], apiKey: string
     const tokensPerPart = totalTokens / totalParts;
     
     return localAnalysis.map(msg => {
-      const partTokens = msg.parts.map(part => Math.round(tokensPerPart));
+      const partTokens = msg.parts.map(() => Math.round(tokensPerPart));
       const msgTotal = partTokens.reduce((sum, t) => sum + t, 0);
       
       return {
